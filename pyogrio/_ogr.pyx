@@ -153,6 +153,86 @@ def remove_virtual_file(vsi_filename):
     return VSIUnlink(vsi_filename.encode("UTF-8"))
 
 
+def create_writeable_virtual_file(ext=''):
+    vsi_filename = f"/vsimem/{uuid4().hex + ext}"
+
+    cdef VSILFILE *fp = NULL
+    vsi_filename_b = vsi_filename.encode('utf-8')
+
+    # Do we actually need to open it? Or only create the name?
+    fp = VSIFOpenL(vsi_filename_b, "w")
+    # TODO close again?
+    return vsi_filename
+
+
+def read_writable_virtual_file(vsi_filename):
+    # mostly copied from MemoryFileBase
+    # fiona.open() does:
+    #
+    # elif mode == "w" and hasattr(fp, "write"):
+    # memfile = MemoryFile()
+    # colxn = memfile.open(
+    #     driver=driver,
+    #     crs=crs,
+    #     schema=schema,
+    #     layer=layer,
+    #     ...
+    #     **kwargs
+    # )
+    # colxn._env.enter_context(memfile)
+    #
+    # # For the writing case we push an extra callback onto the
+    # # ExitStack. It ensures that the MemoryFile's contents are
+    # # copied to the open file object.
+    # def func(*args, **kwds):
+    #     memfile.seek(0)
+    #     fp.write(memfile.read())
+    #
+    # colxn._env.callback(func)
+    # return colxn
+
+    cdef VSILFILE *fp = NULL
+    name_b = vsi_filename.encode('utf-8')
+
+    # from MemoryFileBase.exists. Needed in this case?
+    cdef VSIStatBufL st_buf
+    exists = VSIStatL(name_b, &st_buf) == 0
+
+    fp = VSIFOpenL(name_b, "w")
+    if fp == NULL:
+        raise OSError("VSIFOpenL failed")
+
+    # MemoryFileBase.seek(0)
+    VSIFSeekL(fp, 0, 0)
+
+    # MemoryFileBase.read()
+    cdef bytes result
+    cdef unsigned char *buffer = NULL
+    cdef vsi_l_offset buffer_len = 0
+
+    buffer = VSIGetMemFileBuffer(name_b, &buffer_len, 0)
+    size = buffer_len
+
+    buffer = <unsigned char *>CPLMalloc(size)
+
+    try:
+        objects_read = VSIFReadL(buffer, 1, size, fp)
+        result = <bytes>buffer[:objects_read]
+        return result
+
+    finally:
+        CPLFree(buffer)
+        VSIFCloseL(fp)
+        fp = NULL
+
+
+    # # As soon as support for GDAL < 3 is dropped, we can switch
+    # # to VSIRmdirRecursive.
+    # VSIUnlink(self.name.encode("utf-8"))
+    # VSIRmdir(self._dirname.encode("utf-8"))
+    # self.closed = True
+
+
 cdef void set_proj_search_path(str path):
     """Set PROJ library data file search path for use in GDAL."""
     cdef char **paths = NULL
